@@ -14,14 +14,11 @@ either express or implied. See the License for the specific language governing p
 
 import osmnx as ox
 import networkx as nx
-from itertools import permutations
 import time
-import matplotlib.pyplot as plt
 import folium
-from datetime import datetime
-import os
+import os,sys
 import webbrowser as wb
-
+import getpass as gt
 #
 #
 
@@ -63,13 +60,20 @@ def find_shortest_path_addresses(addresses: list):
     print(f"Centroid: {centroid}")
     ##
     # Create a graph from OSM data
-    G = ox.graph_from_point(coords[0], dist=1000, network_type='walk')
+    G = ox.graph_from_point(coords[0], dist=1000, network_type='all',simplify=False)
+    # Get the size of the graph object
+    graph_size = sys.getsizeof(G)
+    print(f"Size of the graph object: {graph_size} bytes")
 
     # Find the nearest nodes in the graph for each coordinate
-    nodes = [ox.distance.nearest_nodes(
-        G, point[1], point[0]) for point in coords]
+    nodes = [ox.distance.nearest_nodes(G, point[1], point[0]) for point in coords]
+
+    # Add the addresses as attributes to the nodes
+    for i, node in enumerate(nodes):
+        G.nodes[nodes[i]]['address'] = addresses[i]
 
     # Create a complete graph for TSP https://networkx.org/documentation/stable/reference/generated/networkx.generators.classic.complete_graph.html
+    print("number of nodes: ", len(nodes))
 
     tsp_graph = nx.complete_graph(len(nodes))
     #
@@ -81,8 +85,7 @@ def find_shortest_path_addresses(addresses: list):
                 tsp_graph[i][j]['weight'] = nx.shortest_path_length(G, u, v, weight='length')
 
     # Solve the TSP problem
-    tsp_path = nx.approximation.traveling_salesman_problem(
-        tsp_graph, cycle=True)
+    tsp_path = nx.approximation.traveling_salesman_problem(tsp_graph, cycle=True)
 
     # Map nodes back to addresses
     sorted_addresses = [addresses[i] for i in tsp_path[:-1]]
@@ -118,32 +121,47 @@ def plot_route_on_map(G: nx.Graph, nodes: list, addresses:list):
 
     # Find the shortest path between each pair of consecutive nodes
     route = []
+    path_length = total_length = 0
     for i in range(len(nodes) - 1):
-        segment = nx.shortest_path(G, nodes[i], nodes[i + 1], weight='length')
+        segment = ox.routing.shortest_path(G, nodes[i], nodes[i + 1], weight='length')
+        path_length = nx.shortest_path_length(G, nodes[i], nodes[i + 1], weight='length') # get the length of the path
+        total_length += path_length # add the length of the path to the total length
         route.extend(segment[:-1])  # Add all but the last node to avoid duplication
 
-    route.append(nodes[-1])  # Add the last node
+    # Calculate the total length of the route
+    route.append(nodes[0])  # Add the last node, aka back to the beginning
+    total_length += nx.shortest_path_length(G, nodes[-1], nodes[0], weight='length')
+
+    print(f"Total length of the route: {total_length} meters or {total_length / 1609.34} miles")
 
     # Extract the latitude and longitude of each node in the route
     route_coords = [(G.nodes[node]['y'], G.nodes[node]['x']) for node in route]
 
     # Create a Folium map centered around the first node in the route
-    m = folium.Map(location=route_coords[0], zoom_start=14)
+    m = folium.Map(location=route_coords[0], zoom_start=16)
 
     # Add the route to the map
     folium.PolyLine(route_coords, color='blue', weight=5, opacity=0.7).add_to(m)
 
     # Add markers for the start and end points
     for i in range(0,len(nodes)-1):
+        x = G.nodes[nodes[i]]['x']
+        y = G.nodes[nodes[i]]['y']
+        loc_tuple = (y,x)
         if(i==0):
-            folium.Marker(location=route_coords[0], popup='Start\n' + addresses[i], icon=folium.Icon(color='green')).add_to(m)
-        elif(i==len(nodes)-1):
-            folium.Marker(location=route_coords[-1], popup='End\n' + addresses[i], icon=folium.Icon(color='red')).add_to(m)
+            folium.Marker(location=loc_tuple, popup='Start/End\n' + addresses[0], 
+    #                      icon=folium.Icon(color='green')
+                          icon=folium.DivIcon(html=f"""<div style="font-family: Arial; color: white; background-color: black; border-radius: 50%; width: 24px; height: 24px; text-align: center; line-height: 24px;">{i+1}</div>""")
+                          ).add_to(m)
+            
         else:
-            folium.Marker(location=route_coords[i], popup=addresses[i], icon=folium.Icon(color='cadetblue')).add_to(m)     
+            folium.Marker(location=loc_tuple, popup=addresses[i] + "#" + str(i), 
+        #                  icon=folium.Icon(color='black')
+                          icon=folium.DivIcon(html=f"""<div style="font-family: Arial; color: white; background-color: black; border-radius: 50%; width: 24px; height: 24px; text-align: center; line-height: 24px;">{i+1}</div>""")
+                          ).add_to(m)     
 
     # Save the map to an HTML file and display it
-    filename = 'route_map.' + str(time.time()) + '.html'
+    filename = 'route_map.' + str(time.time()) + "." + gt.getuser() + '.html'
 
     m.save(filename)
 
